@@ -1,4 +1,4 @@
-# Kanji server
+# furigana server
 
 Store Japanese words in `tsv` file.
 
