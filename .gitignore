@@ -1,0 +1,9 @@
+node_modules
+__pycache__
+.ipynb_checkpoints
+.vscode
+*.json
+*.swp
+*.log
+*.pyc
+yarn.lock
