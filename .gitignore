@@ -7,3 +7,7 @@ __pycache__
 *.log
 *.pyc
 yarn.lock
+index.js
+*.map
+note.ipynb
+!package.json

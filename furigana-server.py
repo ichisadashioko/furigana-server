@@ -10,6 +10,8 @@ import html
 import io
 import email.utils
 import datetime
+import json
+from typing import List
 
 import http
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,15 +20,12 @@ import urllib
 import urllib.parse
 
 
-def convert_to_unix_style_path(path: str):
-    retval = re.sub(f'[\/]+', '/')
-    return retval
-
-
 g_hostname = 'localhost'
 g_server_port = 8080
 
 g_script_dir, script_filename = os.path.split(__file__)
+if len(g_script_dir) == 0:
+    g_script_dir = '.'
 
 g_served_directory = g_script_dir
 
@@ -83,11 +82,106 @@ if not g_dlt_body_placeholder in g_dlt:
     ))
 
 
-def trim_path_separators(s: str):
-    return re.sub('/+', '/', s)
+class FuriganaRecord:
+    HEADERS = ['word', 'furigana', 'meaning', 'note', 'ruby']
+
+    @classmethod
+    def headers_to_tsv(cls):
+        cells = map(lambda cell: FuriganaRecord.escape(cell), cls.HEADERS)
+        return '\t'.join(cells)
+
+    def __init__(self):
+        self.word = ''
+        self.furigana = ''
+        self.ruby = ''
+        self.note = ''
+        self.meaning = ''
+
+    def to_dict(self):
+        return {
+            'word': self.word,
+            'furigana': self.furigana,
+            'meaning': self.meaning,
+            'note': self.note,
+            'ruby': self.ruby,
+        }
+
+    @staticmethod
+    def escape(s: str):
+        s = s.replace('\t', '\\t')
+        s = s.replace('\n', '\\n')
+        return s
+
+    @staticmethod
+    def unescape(s: str):
+        s = s.replace('\\t', '\t')
+        s = s.replace('\\n', '\n')
+        return s
+
+    def to_list(self):
+        return [self.word, self.furigana, self.meaning, self.note, self.ruby]
+
+    def to_tsv_row(self):
+        cells = self.to_list()
+        cells = map(lambda cell: self.escape(cell), cells)
+        return '\t'.join(cells)
+
+    def __repr__(self):
+        return repr(self.to_dict())
 
 
-class KanjiServer(BaseHTTPRequestHandler):
+g_furigana_database: List[FuriganaRecord] = []
+g_tsv_filepath = os.path.join(g_script_dir, 'database.tsv')
+
+if not os.path.exists(g_tsv_filepath):
+    open(g_tsv_filepath, mode='w', encoding='utf-8').write(FuriganaRecord.headers_to_tsv() + '\n')
+
+tsv_lines = open(g_tsv_filepath, mode='r', encoding='utf-8').readlines()
+tsv_lines = map(lambda line: line.replace('\n', ''), tsv_lines)
+# filter empty lines
+tsv_lines = filter(lambda line: len(line) > 0, tsv_lines)
+
+tsv_lines: List[str] = list(tsv_lines)
+num_tsv_lines = len(tsv_lines)
+
+if num_tsv_lines == 0:
+    # empty file
+    open(g_tsv_filepath, mode='w', encoding='utf-8').write(FuriganaRecord.headers_to_tsv() + '\n')
+else:
+    # check headers
+    first_line = tsv_lines[0]
+    print('first_line:', repr(first_line))
+
+    header_line = FuriganaRecord.headers_to_tsv()
+    if header_line == first_line:
+        max_num_cols = len(FuriganaRecord.HEADERS)
+        row_idx = 1
+        while row_idx < num_tsv_lines:
+            line = tsv_lines[row_idx]
+            cells = line.split('\t')
+
+            if len(cells) > max_num_cols:
+                print(line)
+                raise Exception(f'The TSV file is not compatible with the current code!')
+            else:
+                while len(cells) < max_num_cols:
+                    cells.append('')
+
+            record = FuriganaRecord()
+            record.word = FuriganaRecord.unescape(cells[0])
+            record.furigana = FuriganaRecord.unescape(cells[1])
+            record.meaning = FuriganaRecord.unescape(cells[2])
+            record.note = FuriganaRecord.unescape(cells[3])
+            record.ruby = FuriganaRecord.unescape(cells[4])
+
+            g_furigana_database.append(record)
+
+            row_idx += 1
+    else:
+        raise Exception(f'The TSV file is not compatible with the current code!')
+
+
+class FuriganaServer(BaseHTTPRequestHandler):
 
     def translate_path(self, path: str):
         words = path.split('/')
@@ -257,8 +351,45 @@ class KanjiServer(BaseHTTPRequestHandler):
             finally:
                 f.close()
 
+    def list_all(self):
+        serialized_records = []
+        for record in g_furigana_database:
+            serialized_records.append(record.to_dict())
 
-web_server = HTTPServer((g_hostname, g_server_port), KanjiServer)
+        f = io.BytesIO()
+        serialized_json_str = json.dumps(serialized_records, ensure_ascii=False)
+        encoded_json_str = serialized_json_str.encode('utf-8')
+        f.write(encoded_json_str)
+        f.seek(0)
+
+        self.send_response(http.HTTPStatus.OK)
+        self.send_header('Content-Type', 'application/json; charset=UTF-8')
+        self.send_header('Content-Length', str(len(encoded_json_str)))
+        self.end_headers()
+
+        return f
+
+    def do_POST(self):
+        """
+        All the API will be accessed via POST method so that we can
+        still keep the static file serving.
+        """
+        split_result = urllib.parse.urlsplit(self.path)
+        path = split_result.path
+
+        if path == '/api/all':
+            f = self.list_all()
+        else:
+            self.send_error(http.HTTPStatus.NOT_FOUND, 'API endpoint does not exist!')
+            f = None
+        if f:
+            try:
+                shutil.copyfileobj(f, self.wfile)
+            finally:
+                f.close()
+
+
+web_server = HTTPServer((g_hostname, g_server_port), FuriganaServer)
 print(f'Serving server at http://{g_hostname}:{g_server_port}')
 
 try:
