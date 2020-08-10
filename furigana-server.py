@@ -20,7 +20,7 @@ import urllib
 import urllib.parse
 
 
-g_hostname = 'localhost'
+g_hostname = '0.0.0.0'
 g_server_port = 8080
 
 g_script_dir, script_filename = os.path.split(__file__)
